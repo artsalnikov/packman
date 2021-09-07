@@ -11,7 +11,7 @@ import sbt.internal.util.ManagedLogger
 
 import java.io.{File, PrintWriter}
 import java.nio.charset.StandardCharsets
-import java.nio.file.Path
+import java.nio.file.{Path, Paths}
 import scala.collection.convert.ImplicitConversions._
 import scala.language.reflectiveCalls
 import scala.util.Properties
@@ -19,23 +19,21 @@ import scala.util.Properties
 object PackmanPlugin extends AutoPlugin {
 
   object autoImport extends PackmanKeys
-
   import autoImport._
 
   override lazy val projectSettings: Seq[Setting[_]] = Seq(
-    ctlDescriptionsPath := {
-      target.value / "ctl"
-    },
-    //zip := zipTask.value,
+    ctlDescriptionsPath := target.value / "ctl",
     productionPackage := productionPackageTask.value
   )
 
   private def productionPackageTask = Def.task {
     val logger = streams.value.log
-    logger.info("Production package...")
+    val pythonDirectory = target.value / "python"
+    logger.info(s"Production package in ${baseDirectory.value}")
+    createPythonParties(pythonDirectory, baseDirectory.value)
     createCtlDescriptions((Compile / fullClasspath).value.map(_.data.toPath), scalaInstance.value,
       ctlDescriptionsPath.value / "ctl.yml", logger)
-    compose(target.value / "composed", ctlDescriptionsPath.value, logger)
+    compose(target.value / "composed", ctlDescriptionsPath.value, pythonDirectory, logger)
     zip(target.value, logger)
   }
 
@@ -55,10 +53,38 @@ object PackmanPlugin extends AutoPlugin {
     }
   }
 
-  private def compose(targetDirectory: File, ctlDescriptionFile: File, logger: ManagedLogger): Unit = {
+  private def createPythonParties(pythonDirectory: File, projectPath: File): Unit = {
+    val modules = getModules(projectPath)
+    modules.map(getPythonRoots).reduce(_ ++ _).foreach { file =>
+      println(s"TEEST: ${projectPath.toPath.relativize(file.toPath)}")
+      val archiveName = projectPath.toPath.relativize(file.toPath).toString.replaceAll("[^A-Za-z0-9]", "-")
+      val archiveDirectory = pythonDirectory / archiveName
+      IO.createDirectory(archiveDirectory)
+      val archiveFile = archiveDirectory / (archiveName + ".zip")
+      IO.zip(sbt.io.Path.allSubpaths(file), archiveFile, None)
+    }
+  }
+
+  private def getModules(projectPath: File): Array[File] = {
+    if (isModule(projectPath)) Array(projectPath)
+    else projectPath.listFiles.filter(isModule)
+  }
+
+  private def isModule(path: File): Boolean = path.isDirectory && (path / "src" / "main").exists
+
+  private def getPythonRoots(pythonSourcePath: File): Array[File] = {
+    val (directories, files) = pythonSourcePath.listFiles.partition(_.isDirectory)
+    files.filter(_.getName == "Main.py") ++ directories.map(getPythonRoots).reduceOption(_ ++ _).getOrElse(Array())
+  }
+
+  private def compose(targetDirectory: File,
+                      ctlDescriptionFile: File,
+                      pythonDirectory: File,
+                      logger: ManagedLogger): Unit = {
     IO.createDirectory(targetDirectory)
     logger.info(s"Target directory for compose $targetDirectory created")
     IO.copyDirectory(ctlDescriptionFile, targetDirectory / "ctl", CopyOptions().withOverwrite(true))
+    IO.copyDirectory(pythonDirectory, targetDirectory, CopyOptions().withOverwrite(true))
     logger.info("Compose finished")
   }
 

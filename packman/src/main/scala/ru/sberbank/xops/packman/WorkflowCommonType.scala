@@ -6,4 +6,6 @@ abstract class WorkflowCommonType {
 
   def getDescription: String
 
+  val executorNumber: Int = 8
+
 }
